@@ -104,6 +104,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Export handler for serverless compatibility across all Vercel runtime versions
+handler = app
+
 # CORS configuration - Allow all LAN devices and development ports
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "*")
 origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
