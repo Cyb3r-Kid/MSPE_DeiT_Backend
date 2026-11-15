@@ -1,5 +1,7 @@
 import os
+import secrets
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,13 +21,26 @@ def now():
     return datetime.now(timezone.utc)
 
 
+def _is_directory_writable(directory: Path) -> bool:
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / f".probe_{os.getpid()}_{secrets.token_hex(4)}"
+        probe.write_text("ok")
+        probe.unlink(missing_ok=True)
+        return True
+    except (OSError, PermissionError):
+        return False
+
+
 def resolve_database_url() -> tuple[str, Path | None]:
     """Resolves and validates the database URL, ensuring parent directories exist.
-    Guarantees stable absolute path for SQLite and handles Windows folder protection.
+    Guarantees stable absolute path for SQLite and handles Windows folder protection & Serverless read-only filesystems.
     """
     raw_url = os.getenv("DATABASE_URL", "sqlite:///./mspe.db")
 
     if not raw_url.startswith("sqlite"):
+        if raw_url.startswith("postgres://"):
+            raw_url = raw_url.replace("postgres://", "postgresql://", 1)
         return raw_url, None
 
     backend_dir = Path(__file__).resolve().parent.parent
@@ -46,21 +61,35 @@ def resolve_database_url() -> tuple[str, Path | None]:
     else:
         db_path = db_path.resolve()
 
-    # Automatically create parent directory and verify writability
-    try:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        probe = db_path.parent / f".db_probe_{os.getpid()}"
-        with open(probe, "a") as f:
-            f.write("")
-        probe.unlink(missing_ok=True)
-        final_path = db_path
-    except (OSError, PermissionError):
-        # Protected folder (such as Windows Controlled Folder Access on user folders)
-        fallback_dir = Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "MSPE_DeiT"
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-        final_path = (fallback_dir / db_path.name).resolve()
+    final_path: Path | None = None
 
-    # Preserve any existing database file
+    # 1. Check if configured target location is writable
+    if _is_directory_writable(db_path.parent):
+        final_path = db_path
+    else:
+        # 2. Check Windows LOCALAPPDATA
+        local_app_data = os.getenv("LOCALAPPDATA")
+        if local_app_data:
+            candidate = Path(local_app_data) / "MSPE_DeiT"
+            if _is_directory_writable(candidate):
+                final_path = (candidate / db_path.name).resolve()
+
+        # 3. Check OS temp directory (works everywhere, guaranteed writable on Vercel/AWS Lambda/Linux)
+        if final_path is None:
+            tmp_candidate = Path(tempfile.gettempdir()) / "mspe_deit"
+            if _is_directory_writable(tmp_candidate):
+                final_path = (tmp_candidate / db_path.name).resolve()
+
+        # 4. Fallback to /tmp directly
+        if final_path is None:
+            posix_tmp = Path("/tmp/mspe_deit")
+            if _is_directory_writable(posix_tmp):
+                final_path = (posix_tmp / db_path.name).resolve()
+
+    if final_path is None:
+        return "sqlite:///:memory:", None
+
+    # Preserve any existing database file if accessible
     orig_path = (backend_dir / db_path.name).resolve()
     if orig_path.is_file() and orig_path.stat().st_size > 0 and not final_path.is_file():
         try:
@@ -68,15 +97,12 @@ def resolve_database_url() -> tuple[str, Path | None]:
         except (OSError, PermissionError):
             pass
 
-    # Ensure parent directory exists
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-
     final_url = f"sqlite:///{final_path.as_posix()}"
     return final_url, final_path
 
 
 def get_upload_dir() -> Path:
-    """Resolves and validates the upload directory, ensuring it is writable on Windows."""
+    """Resolves and validates the upload directory, ensuring it is writable on all platforms including serverless."""
     raw = os.getenv("UPLOAD_DIR", "./private_uploads")
     backend_dir = Path(__file__).resolve().parent.parent
     target = Path(raw)
@@ -84,17 +110,27 @@ def get_upload_dir() -> Path:
         target = (backend_dir / target).resolve()
     else:
         target = target.resolve()
-    try:
-        target.mkdir(parents=True, exist_ok=True)
-        probe = target / f".upload_probe_{os.getpid()}"
-        with open(probe, "a") as f:
-            f.write("")
-        probe.unlink(missing_ok=True)
+
+    if _is_directory_writable(target):
         return target
-    except (OSError, PermissionError):
-        fallback = Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "MSPE_DeiT" / "uploads"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback.resolve()
+
+    # Windows LOCALAPPDATA
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if local_app_data:
+        candidate = Path(local_app_data) / "MSPE_DeiT" / "uploads"
+        if _is_directory_writable(candidate):
+            return candidate
+
+    # OS temp directory (guaranteed on Vercel / AWS Lambda)
+    tmp_candidate = Path(tempfile.gettempdir()) / "mspe_deit_uploads"
+    if _is_directory_writable(tmp_candidate):
+        return tmp_candidate
+
+    posix_tmp = Path("/tmp/mspe_deit_uploads")
+    if _is_directory_writable(posix_tmp):
+        return posix_tmp
+
+    return Path(tempfile.gettempdir())
 
 
 DATABASE_URL, DB_PATH = resolve_database_url()

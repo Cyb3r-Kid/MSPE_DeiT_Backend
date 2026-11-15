@@ -1,7 +1,9 @@
 import axios from 'axios';
 import { useSession } from '../store/session';
 
-let currentBaseUrl: string = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8001';
+export const PRODUCTION_API_URL = 'https://mspe-dei-t-backend-eight.vercel.app';
+
+let currentBaseUrl: string = (process.env.EXPO_PUBLIC_API_URL || PRODUCTION_API_URL).trim().replace(/\/+$/, '');
 
 export function getBaseUrl(): string {
   return currentBaseUrl;

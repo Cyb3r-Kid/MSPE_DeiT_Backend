@@ -84,9 +84,15 @@ def init_models():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(engine)
-    upload_dir = get_upload_dir()
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        Base.metadata.create_all(engine)
+    except Exception as e:
+        print(f"[Startup] DB create_all warning: {e}")
+    try:
+        upload_dir = get_upload_dir()
+        upload_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"[Startup] Upload dir warning: {e}")
     inference_service.init_local_models()
     yield
 
@@ -113,6 +119,8 @@ app.add_middleware(
 
 
 # ── Health Endpoint ────────────────────────────────────────────────────────────
+@app.get("/")
+@app.get("/health")
 @app.get("/api/health")
 @app.get("/api/v1/health")
 def health():

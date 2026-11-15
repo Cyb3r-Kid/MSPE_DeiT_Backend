@@ -7,12 +7,22 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://mspe-dei-t-backend-eight.vercel.app"
       }
     },
     "development": {
       "developmentClient": true,
       "distribution": "internal"
     },
-    "production": {}
+    "production": {
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://mspe-dei-t-backend-eight.vercel.app"
+      }
+    }
   }
 }

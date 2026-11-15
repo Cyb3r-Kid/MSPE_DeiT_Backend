@@ -2,20 +2,16 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { Platform } from 'react-native';
-import { setBaseUrl } from '../services/api';
+import { setBaseUrl, PRODUCTION_API_URL } from '../services/api';
 
 const STORAGE_KEY = 'mspe_backend_url';
 
-// Default host based on platform
+// Default host: production Vercel cloud URL (or EXPO_PUBLIC_API_URL if set)
 export const getDefaultBackendUrl = (): string => {
   if (process.env.EXPO_PUBLIC_API_URL) {
-    return process.env.EXPO_PUBLIC_API_URL;
+    return process.env.EXPO_PUBLIC_API_URL.trim().replace(/\/+$/, '');
   }
-  if (Platform.OS === 'android') {
-    // 10.0.2.2 is Android emulator loopback; for physical Wi-Fi devices user enters their laptop IP
-    return 'http://192.168.1.100:8001';
-  }
-  return 'http://127.0.0.1:8001';
+  return PRODUCTION_API_URL;
 };
 
 export interface ConnectionState {
@@ -49,7 +45,11 @@ export const useConnection = create<ConnectionState>((set, get) => ({
   initialize: async () => {
     try {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
-      const activeUrl = saved && saved.trim() ? saved.trim() : getDefaultBackendUrl();
+      let activeUrl = saved && saved.trim() ? saved.trim() : getDefaultBackendUrl();
+      // Ensure stale local development LAN IPs (192.168.x.x, 127.0.0.1, localhost, 10.0.2.2) do not override the production URL
+      if (!saved || saved.includes('192.168.') || saved.includes('127.0.0.1') || saved.includes('localhost') || saved.includes('10.0.2.2')) {
+        activeUrl = getDefaultBackendUrl();
+      }
       setBaseUrl(activeUrl);
       set({ url: activeUrl, ready: true });
       // Run initial background test

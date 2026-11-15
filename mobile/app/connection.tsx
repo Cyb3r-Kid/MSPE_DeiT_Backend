@@ -115,9 +115,9 @@ export default function ConnectionSettings() {
 
       {/* URL Input Form */}
       <Card>
-        <Text style={styles.sectionTitle}>Backend URL / Laptop IP</Text>
+        <Text style={styles.sectionTitle}>Backend URL / API Server</Text>
         <Text style={styles.sectionSubtitle}>
-          Enter your Windows laptop's IP address and port 8001
+          Production Cloud URL or Local Development Host
         </Text>
 
         <Input
@@ -127,7 +127,7 @@ export default function ConnectionSettings() {
             setInputUrl(val);
             setSaveSuccess(false);
           }}
-          placeholder="http://192.168.1.105:8001"
+          placeholder="https://mspe-dei-t-backend-eight.vercel.app"
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="url"
@@ -138,9 +138,9 @@ export default function ConnectionSettings() {
         <View style={styles.presetChipsRow}>
           <TouchableOpacity
             style={styles.chip}
-            onPress={() => applyPreset('http://192.168.1.100:8001')}
+            onPress={() => applyPreset('https://mspe-dei-t-backend-eight.vercel.app')}
           >
-            <Text style={styles.chipText}>192.168.1.x:8001</Text>
+            <Text style={styles.chipText}>Vercel Production</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.chip}
