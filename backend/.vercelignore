@@ -1,0 +1,25 @@
+# Vercel Deployment Ignore - Backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+test-reports/
+uploads/
+*.db
+*.sqlite
+*.sqlite3
+checkpoints/
+*.pt
+*.bin
+*.onnx
+*.joblib
+*.pkl
+.env*
+!.env.example
+client_delivery/
+*.tar.gz
+*.zip

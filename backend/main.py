@@ -21,7 +21,6 @@ from PIL import Image, ImageStat, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-import torch
 
 # Ensure local backend imports resolve
 backend_dir = Path(__file__).resolve().parent
@@ -71,48 +70,16 @@ from app.security import (
     hasher,
     new_refresh_token,
 )
-from models.mspe_deit import MSPEDeiT, load_or_init_mspe_deit
-from models.clinical_models import ANNClinicalModel, XGBoostClinicalModel, load_or_init_ann
-from models.ensemble import ensemble_assessment, soft_vote, classify_risk
-from services.preprocessor import preprocess_image, preprocess_clinical
 from services.pdf_report import generate_pdf_report
-
-
-# Global model instances with deterministic weights
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-mspe_model: Optional[MSPEDeiT] = None
-ann_model: Optional[ANNClinicalModel] = None
-xgb_model: Optional[XGBoostClinicalModel] = None
-
-
-def resolve_checkpoint_dir() -> Path:
-    """Finds checkpoint directory across local, backend, and appdata locations."""
-    custom = os.getenv("CHECKPOINT_DIR")
-    candidates = [
-        Path(custom).resolve() if custom else None,
-        backend_dir / "checkpoints",
-        Path("./checkpoints").resolve(),
-        (Path(os.getenv("LOCALAPPDATA", "")) / "MSPE_DeiT" / "checkpoints") if os.getenv("LOCALAPPDATA") else None,
-    ]
-    for c in candidates:
-        if c and (c / "mspe.pt").is_file():
-            return c
-    return Path(custom or "./checkpoints")
+from services.inference_service import inference_service
+from models.ensemble import classify_risk, ensemble_assessment, soft_vote
 
 
 def init_models():
-    global mspe_model, ann_model, xgb_model
-    if mspe_model is None or ann_model is None or xgb_model is None:
-        ckpt_dir = resolve_checkpoint_dir()
-        mspe_ckpt = ckpt_dir / "mspe.pt"
-        ann_ckpt = ckpt_dir / "ann.pt"
-        xgb_ckpt = ckpt_dir / "xgb.joblib"
-        if mspe_model is None:
-            mspe_model = load_or_init_mspe_deit(mspe_ckpt if mspe_ckpt.is_file() else None, device=device)
-        if ann_model is None:
-            ann_model = load_or_init_ann(ann_ckpt if ann_ckpt.is_file() else None, input_dim=14, device=device)
-        if xgb_model is None:
-            xgb_model = XGBoostClinicalModel(xgb_ckpt if xgb_ckpt.is_file() else None)
+    """Initializes models lazily if local ML packages exist, or verifies remote service."""
+    if inference_service.has_remote_service:
+        return True
+    return inference_service.init_local_models()
 
 
 @asynccontextmanager
@@ -120,7 +87,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
     upload_dir = get_upload_dir()
     upload_dir.mkdir(parents=True, exist_ok=True)
-    init_models()
+    inference_service.init_local_models()
     yield
 
 
@@ -149,32 +116,34 @@ app.add_middleware(
 @app.get("/api/health")
 @app.get("/api/v1/health")
 def health():
-    ckpt_dir = resolve_checkpoint_dir()
-    has_checkpoints = (ckpt_dir / "mspe.pt").is_file()
+    backend_mode = (
+        "remote_service" if inference_service.has_remote_service
+        else "local_ml" if inference_service.is_local_ml_available
+        else "serverless_lightweight"
+    )
+    is_ready = inference_service.is_ready
     return {
         "status": "healthy",
         "system": "MSPE-DeiT Screening API",
-        "models_initialized": mspe_model is not None,
-        "device": str(device),
-        "mode": "production_checkpoint" if has_checkpoints else "deterministic_offline_fallback",
-        "checkpoint_dir": str(ckpt_dir),
+        "models_initialized": is_ready,
+        "inference_backend": backend_mode,
+        "mode": "production_ready" if is_ready else "serverless_lightweight",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
 @app.get("/api/v1/models/status")
 def models_status():
-    ckpt_dir = Path(os.getenv("CHECKPOINT_DIR", "./checkpoints"))
-    artifacts_dir = Path(os.getenv("ARTIFACT_DIR", "../artifacts"))
-    has_real = (ckpt_dir / "mspe.pt").is_file() or (artifacts_dir / "mspe.pt").is_file()
+    backend_mode = (
+        "remote_service" if inference_service.has_remote_service
+        else "local_ml" if inference_service.is_local_ml_available
+        else "serverless_lightweight"
+    )
     return {
-        "ready": True,  # Always ready due to deterministic fallback
-        "mode": "real" if has_real else "deterministic_fallback",
-        "artifacts": {
-            "mspe.pt": (ckpt_dir / "mspe.pt").is_file() or (artifacts_dir / "mspe.pt").is_file(),
-            "xgb.joblib": (ckpt_dir / "xgb.joblib").is_file() or (artifacts_dir / "xgb.joblib").is_file(),
-            "ann.pt": (ckpt_dir / "ann.pt").is_file() or (artifacts_dir / "ann.pt").is_file(),
-        },
+        "ready": inference_service.is_ready,
+        "mode": backend_mode,
+        "inference_backend": backend_mode,
+        "remote_service_url": os.getenv("INFERENCE_SERVICE_URL") or None,
         "supported_modalities": ["dermoscopy", "dermoscopic", "tbp_3d", "3d_tbp"],
     }
 
@@ -282,32 +251,20 @@ async def analyze_screening(
         except ValueError:
             raise HTTPException(422, "Lesion diameter must be a valid number.")
 
-    # 3. Preprocess inputs
-    img_tensor = preprocess_image(image_bytes).to(device)
-    np_clin, torch_clin = preprocess_clinical(clinical_data)
-    torch_clin = torch_clin.to(device)
-
-    # 4. Execute multimodal inference branches
-    # Branch 1: MSPE-DeiT
-    try:
-        p_mspe = float(mspe_model.predict_proba(img_tensor, modality).item())
-    except Exception:
-        p_mspe = 0.5
-
-    # Branch 2: XGBoost
-    try:
-        p_xgb = float(xgb_model.predict_proba(np_clin)[0])
-    except Exception:
-        p_xgb = 0.5
-
-    # Branch 3: ANN
-    try:
-        p_ann = float(ann_model.predict_proba(torch_clin).item())
-    except Exception:
-        p_ann = 0.5
-
-    # 5. Ensemble fusion (soft-voting equal weight 1/3)
-    assessment_res = ensemble_assessment(p_mspe, p_xgb, p_ann)
+    # 3. Execute multimodal inference via inference service (Remote worker or Local models)
+    infer_res = await inference_service.run_inference(
+        image_bytes=image_bytes,
+        modality=modality,
+        clinical_data=clinical_data,
+        filename=image.filename or "lesion.jpg",
+        content_type=image.content_type or "image/jpeg",
+    )
+    p_mspe = infer_res["p_mspe"]
+    p_xgb = infer_res["p_xgb"]
+    p_ann = infer_res["p_ann"]
+    p_ens = infer_res["ensemble_probability"]
+    risk_level = infer_res["risk_level"]
+    recommendation = infer_res["recommendation"]
 
     # 6. Save image to disk and record in DB
     upload_dir = get_upload_dir()
@@ -336,11 +293,11 @@ async def analyze_screening(
     # Persist Prediction
     db_pred = Prediction(
         assessment_id=db_assessment.id,
-        model_version="MSPE-DeiT-v1.0",
+        model_version=infer_res.get("model_version", "MSPE-DeiT-v1.0"),
         image_probability=p_mspe,
         xgboost_probability=p_xgb,
         ann_probability=p_ann,
-        ensemble_probability=assessment_res["ensemble_probability"],
+        ensemble_probability=p_ens,
         threshold=0.50,
         calibration_version="isotonic-v1",
     )
@@ -350,12 +307,16 @@ async def analyze_screening(
     return {
         "id": screening_id,
         "database_id": db_assessment.id,
-        "risk_level": assessment_res["risk_level"],
-        "ensemble_probability": assessment_res["ensemble_probability"],
-        "model_probabilities": assessment_res["model_probabilities"],
+        "risk_level": risk_level,
+        "ensemble_probability": p_ens,
+        "model_probabilities": {
+            "mspe_deit": p_mspe,
+            "xgboost": p_xgb,
+            "ann": p_ann,
+        },
         "modality_used": modality,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "recommendation": assessment_res["recommendation"],
+        "recommendation": recommendation,
     }
 
 
@@ -523,31 +484,36 @@ async def upload_image_v1(assessment_id: int, file: UploadFile = File(...), user
 
 
 @app.post("/api/v1/assessments/{assessment_id}/analyze")
-def analyze_v1(assessment_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+async def analyze_v1(assessment_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     item = db.scalar(select(Assessment).where(Assessment.id == assessment_id, Assessment.user_id == user.id))
     if not item or not item.image_reference:
         raise HTTPException(422, "Upload an image first")
     if item.prediction:
         return get_assessment_v1(assessment_id, user, db)
 
-    init_models()
-    # Run inference with deterministic models
-    img_tensor = preprocess_image(item.image_reference).to(device)
-    np_clin, torch_clin = preprocess_clinical(item.clinical_metadata or {})
-    torch_clin = torch_clin.to(device)
+    image_path = Path(item.image_reference)
+    if not image_path.is_file():
+        raise HTTPException(404, "Image file not found on server")
 
-    p_mspe = float(mspe_model.predict_proba(img_tensor, item.modality).item())
-    p_xgb = float(xgb_model.predict_proba(np_clin)[0])
-    p_ann = float(ann_model.predict_proba(torch_clin).item())
-    p_ens = soft_vote(p_mspe, p_xgb, p_ann)
+    image_bytes = image_path.read_bytes()
+    ext = image_path.suffix.lstrip(".").lower()
+    content_type = "image/png" if ext == "png" else "image/jpeg"
+
+    infer_res = await inference_service.run_inference(
+        image_bytes=image_bytes,
+        modality=item.modality or "dermoscopy",
+        clinical_data=item.clinical_metadata or {},
+        filename=image_path.name,
+        content_type=content_type,
+    )
 
     pred = Prediction(
         assessment_id=item.id,
-        model_version="MSPE-DeiT-v1.0",
-        image_probability=p_mspe,
-        xgboost_probability=p_xgb,
-        ann_probability=p_ann,
-        ensemble_probability=p_ens,
+        model_version=infer_res.get("model_version", "MSPE-DeiT-v1.0"),
+        image_probability=infer_res["p_mspe"],
+        xgboost_probability=infer_res["p_xgb"],
+        ann_probability=infer_res["p_ann"],
+        ensemble_probability=infer_res["ensemble_probability"],
         threshold=0.50,
         calibration_version="isotonic-v1",
     )

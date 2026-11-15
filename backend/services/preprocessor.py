@@ -1,28 +1,31 @@
 """Data ingestion and preprocessing pipelines for MSPE-DeiT.
 Handles multimodal inputs: image standardization and clinical tabular encoding.
+All heavy ML frameworks (torch, torchvision) are imported lazily to support
+lightweight serverless execution on Vercel.
 """
 import io
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
-import numpy as np
 from PIL import Image
-import torch
-import torchvision.transforms as T
 
 # Standard ImageNet normalization parameters
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
-image_transform = T.Compose([
-    T.Resize((224, 224), interpolation=T.InterpolationMode.BICUBIC),
-    T.ToTensor(),
-    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-])
+
+def get_image_transform():
+    """Lazily builds torchvision transforms."""
+    import torchvision.transforms as T
+    return T.Compose([
+        T.Resize((224, 224), interpolation=T.InterpolationMode.BICUBIC),
+        T.ToTensor(),
+        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ])
 
 
 def preprocess_image(
     image_source: Union[str, Path, bytes, io.BytesIO, Image.Image]
-) -> torch.Tensor:
+) -> Any:
     """Loads, verifies, and transforms lesion image into [1, 3, 224, 224] tensor."""
     if isinstance(image_source, Image.Image):
         image = image_source
@@ -36,8 +39,9 @@ def preprocess_image(
         raise TypeError(f"Unsupported image source type: {type(image_source)}")
 
     image = image.convert("RGB")
-    tensor = image_transform(image)  # [3, 224, 224]
-    return tensor.unsqueeze(0)        # [1, 3, 224, 224]
+    transform = get_image_transform()
+    tensor = transform(image)  # [3, 224, 224]
+    return tensor.unsqueeze(0)  # [1, 3, 224, 224]
 
 
 # Anatomic sites vocabulary
@@ -45,7 +49,7 @@ ANATOMIC_SITES = ["head/neck", "upper extremity", "lower extremity", "torso", "p
 FITZPATRICK_TYPES = ["I", "II", "III", "IV", "V", "VI"]
 
 
-def preprocess_clinical(metadata: Dict[str, Any]) -> Tuple[np.ndarray, torch.Tensor]:
+def preprocess_clinical(metadata: Dict[str, Any]) -> Tuple[Any, Any]:
     """Encodes clinical metadata into 14-dimensional feature vector.
     
     Features:
@@ -105,7 +109,20 @@ def preprocess_clinical(metadata: Dict[str, Any]) -> Tuple[np.ndarray, torch.Ten
         fitz_3_4,
         fitz_5_6,
     ]
-    np_vec = np.array([vec], dtype=np.float32)
-    torch_tensor = torch.tensor(np_vec, dtype=torch.float32)
-    return np_vec, torch_tensor
 
+    try:
+        import numpy as np
+        np_vec = np.array([vec], dtype=np.float32)
+    except ImportError:
+        np_vec = [vec]
+
+    try:
+        import torch
+        if hasattr(np_vec, "dtype"):
+            torch_tensor = torch.tensor(np_vec, dtype=torch.float32)
+        else:
+            torch_tensor = torch.tensor([vec], dtype=torch.float32)
+    except ImportError:
+        torch_tensor = None
+
+    return np_vec, torch_tensor
