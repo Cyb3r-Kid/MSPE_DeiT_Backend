@@ -1,0 +1,78 @@
+# Environment and Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+test_rw.txt
+
+# Databases and Local Storage
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+mspe.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+ENV/
+env/
+
+# Node & Frontend Build Outputs
+node_modules/
+.expo/
+.next/
+dist/
+web-build/
+.turbo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Android Native Build Outputs
+android/.gradle/
+android/app/build/
+android/.idea/
+android/*.iml
+android/local.properties
+*.apk
+*.aab
+
+# iOS Native Build Outputs
+ios/Pods/
+ios/build/
+*.xcworkspace
+*.xcodeproj
+
+# Uploads & User Generated Lesion Media
+backend/private_uploads/
+private_uploads/
+uploads/
+
+# OS and Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large Datasets & Model Caches
+datasets/*
+!datasets/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+
+# Checkpoint rules: preserve legitimate architecture weights in backend/checkpoints/
+*.pt
+*.joblib
+*.pth
+!backend/checkpoints/*.pt
+!backend/checkpoints/*.joblib
+!backend/checkpoints/.gitkeep

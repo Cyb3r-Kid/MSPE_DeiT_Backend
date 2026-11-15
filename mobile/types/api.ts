@@ -1,0 +1,2 @@
+export type Assessment = { id: number; modality: string; clinical_metadata: Record<string, unknown>; status: string; created_at: string; completed_at: string | null; has_image: boolean; prediction: null | { model_version: string; image_probability: number; xgboost_probability: number; ann_probability: number; ensemble_probability: number; threshold: number; calibration_version: string } };
+export type ModelStatus = { ready: boolean; mode: string; artifacts: Record<string, boolean>; supported_modalities: string[] };

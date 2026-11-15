@@ -1,0 +1,5 @@
+# Limitations and current status
+
+No separate research documentation, licensed datasets, compatible weights, or validation outputs were supplied. The code does not claim the research paper's metrics. Model architecture, training, and artifact loading are implemented, but real inference is unavailable until the full artifact set is trained, calibrated, and checked. Integrated-gradient image and ANN attribution and XGBoost SHAP code are present but unverified on real artifacts; the API returns unavailable when it cannot compute them. There is no synthetic demo output. Image blur/framing assessment, validation-based ensemble weight tuning, Optuna optimization, subgroup confidence intervals, rate limiting, and robust clinical deployment controls remain unfinished.
+
+The optional mobile clinical fields may be required by a trained model. Missing fields result in a clear 422 response; users should never invent measurements. Smartphone photos are not validated. The 0.5 threshold is a research operating point only and does not define a clinically validated risk category. The application cannot confirm or exclude skin cancer.
